@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Cloud Security Posture Manager (CSPM) Automated Lambda Scanner and EventBridge Scheduler
+
+Parameters:
+  AlertEmailAddress:
+    Type: String
+    Default: security-team@enterprise.internal
+    Description: Email address to subscribe for critical security findings
+
+Resources:
+  # SNS Topic for Critical Alerts
+  CspmAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: cspm-critical-security-alerts
+      DisplayName: CSPM Critical Security Alerts
+
+  CspmAlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref AlertEmailAddress
+      Protocol: email
+      TopicArn: !Ref CspmAlertsTopic
+
+  # IAM Execution Role for CSPM Scanner
+  CspmScannerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CSPM-Automated-Scanner-Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/SecurityAudit
+      Policies:
+        - PolicyName: CspmSnsPublishPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref CspmAlertsTopic
+
+  # Automated Scanner Lambda Function
+  CspmSecurityScannerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cspm-security-scanner-worker
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      CodeUri: .
+      MemorySize: 512
+      Timeout: 300
+      Role: !GetAtt CspmScannerExecutionRole.Arn
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref CspmAlertsTopic
+          AWS_REGION: !Ref 'AWS::Region'
+      Events:
+        ScheduledScan:
+          Type: Schedule
+          Properties:
+            Schedule: rate(6 hours)
+            Name: cspm-periodic-scan-rule
+            Description: Triggers CSPM AWS security posture evaluation every 6 hours
+
+Outputs:
+  ScannerFunctionArn:
+    Description: ARN of the CSPM Lambda Scanner Function
+    Value: !GetAtt CspmSecurityScannerFunction.Arn
+  AlertsTopicArn:
+    Description: SNS Topic ARN for Security Notifications
+    Value: !Ref CspmAlertsTopic
